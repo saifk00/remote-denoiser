@@ -10,6 +10,17 @@ import threading
 from worker import ProcessConfig, Worker
 app = fastapi.FastAPI()
 
+class WorkerRegistry:
+    def __init__(self, models: list[str]) -> None:
+        self._lock = threading.Lock()
+        self._workers: dict[str, Worker] = [{model: Worker(model)} for model in models]
+
+    def get(self, model: str) -> Worker:
+        return self._workers[model]
+
+AVAILABLE_MODELS = ["TreeNetDenoise", "DeepSharpen", "TreeNetDenoiseSuperLight"]
+worker_registry = WorkerRegistry(AVAILABLE_MODELS)
+
 @dataclass
 class RawForgeArgs:
     model: str
@@ -17,14 +28,12 @@ class RawForgeArgs:
     out_file: str
 
 def process(args: RawForgeArgs):
-    worker = Worker(args.model)
     config = ProcessConfig(
         in_file=args.in_file,
         out_file=args.out_file
     )
 
-    thread = threading.Thread(target=lambda: worker.process(config), daemon=True)
-    thread.start()
+    worker_registry.get(args.model).submit(config)
 
 class JobConfig(BaseModel):
     files: list[str]  # list of files by their id as returned by /upload

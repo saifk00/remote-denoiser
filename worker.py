@@ -5,6 +5,7 @@ Designed to be run in background threads by the FastAPI application.
 from RawForge.application.ModelHandler import ModelHandler
 from dataclasses import dataclass
 import logging
+import queue
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -33,6 +34,7 @@ class Worker:
         self.model = model
         self.device = device
         self.handler = ModelHandler()
+        self.queue: queue.Queue[ProcessConfig] = queue.Queue()
 
         # Load model during initialization
         logger.info(f"Loading model: {model}")
@@ -43,6 +45,17 @@ class Worker:
             self.handler.set_device(device)
 
         logger.info(f"Worker initialized with model: {model}")
+
+    def submit(self, config: ProcessConfig) -> None:
+        self.queue.put(config)
+
+    def _run(self) -> None:
+        while True:
+            config = self.queue.get()
+            try:
+                self.process(config)
+            finally:
+                self.queue.task_done()
 
     def process(self, config: ProcessConfig) -> None:
         """
