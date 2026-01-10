@@ -6,12 +6,14 @@ from pathlib import Path
 
 import pytest
 
-from database import init_database, find_by_hash, insert_hash_record, db_transaction, DB_PATH
+from database import init_database, find_by_hash, insert_hash_record, db_transaction
 
 
 @pytest.fixture(autouse=True)
 def clean_test_db():
     """Remove test database before and after each test."""
+    from database import DB_PATH
+
     if DB_PATH.exists():
         DB_PATH.unlink()
     init_database()
@@ -22,6 +24,8 @@ def clean_test_db():
 
 def test_init_database():
     """Test that database schema is created correctly."""
+    from database import DB_PATH
+
     assert DB_PATH.exists()
 
     conn = sqlite3.connect(DB_PATH)

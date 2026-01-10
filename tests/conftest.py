@@ -3,9 +3,39 @@ import sys
 import time
 import socket
 import subprocess
+import shutil
 from contextlib import closing
+from pathlib import Path
 
 import pytest
+
+
+def pytest_configure(config):
+    """
+    Hook that runs before test collection.
+    Set DATA_DIR environment variable for all tests.
+    """
+    temp_dir = Path("pytest-data-tmp")
+
+    # Clean up if it exists from a previous run
+    if temp_dir.exists():
+        shutil.rmtree(temp_dir)
+
+    # Create the directory
+    temp_dir.mkdir(parents=True, exist_ok=True)
+
+    # Set environment variable BEFORE any test code imports modules
+    os.environ["DATA_DIR"] = str(temp_dir)
+
+
+def pytest_unconfigure(config):
+    """
+    Hook that runs after all tests complete.
+    Clean up temporary data directory.
+    """
+    temp_dir = Path("pytest-data-tmp")
+    if temp_dir.exists():
+        shutil.rmtree(temp_dir)
 
 
 def _wait_for_port(host: str, port: int, timeout: float = 10.0) -> bool:

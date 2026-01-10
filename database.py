@@ -3,7 +3,9 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
-DB_PATH = Path(__file__).parent / "data" / "dedup.db"
+from config import get_db_path
+
+DB_PATH = get_db_path()
 
 
 def _get_connection() -> sqlite3.Connection:

@@ -2,6 +2,9 @@
 test-images
 data
 
+# Test data directory
+pytest-data-tmp/
+
 # Python-generated files
 __pycache__/
 *.py[oc]

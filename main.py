@@ -11,6 +11,9 @@ import hashlib
 
 from worker import ProcessConfig, Worker
 from database import init_database, find_by_hash, db_transaction, insert_hash_record
+from config import get_data_dir
+
+data_dir = get_data_dir()
 
 class WorkerRegistry:
     def __init__(self, models: list[str]) -> None:
@@ -53,8 +56,8 @@ class JobConfig(BaseModel):
 @app.post("/job")
 async def create_job(job: JobConfig):
     for file_id in job.files:
-        in_file = f"data/{file_id}/image.dng"
-        out_file = f"data/{file_id}/denoised.dng"
+        in_file = str(data_dir / file_id / "image.dng")
+        out_file = str(data_dir / file_id / "denoised.dng")
         args = RawForgeArgs(model=job.model, in_file=in_file, out_file=out_file)
         process(args)
     return {"status": "jobs created"}
@@ -74,9 +77,9 @@ async def upload_file(file: UploadFile = File(...)):
     file_id = uuid4().hex
 
     with db_transaction() as conn:
-        os.makedirs(f"data/{file_id}", exist_ok=True)
-        file_path = f"data/{file_id}/image.dng"
-        with open(file_path, "wb") as f:
+        os.makedirs(data_dir / file_id, exist_ok=True)
+        file_path = data_dir / file_id / "image.dng"
+        with open(str(file_path), "wb") as f:
             f.write(file_bytes)
 
         insert_hash_record(conn, file_hash, file_id, file_size, filename)
@@ -85,8 +88,8 @@ async def upload_file(file: UploadFile = File(...)):
 
 @app.get("/job/{file_id}/download")
 async def download_file(file_id: str):
-    file_path = f"data/{file_id}/denoised.dng"
-    return fastapi.FileResponse(file_path)
+    file_path = data_dir / file_id / "denoised.dng"
+    return fastapi.FileResponse(str(file_path))
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)

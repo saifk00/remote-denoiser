@@ -4,6 +4,8 @@ import uuid
 from urllib import request
 import concurrent.futures
 
+from config import get_data_dir
+
 
 def _build_multipart(field_name: str, filename: str, data: bytes, boundary: str) -> bytes:
     """Construct a multipart/form-data body for a single file field."""
@@ -82,7 +84,8 @@ def test_deduped_file_only_creates_one_directory(api_server):
     resp2 = _upload_bytes(api_server, payload)
     assert resp2["file_id"] == file_id
 
-    file_path = f"data/{file_id}/image.dng"
+    data_dir = get_data_dir()
+    file_path = data_dir / file_id / "image.dng"
     assert os.path.exists(file_path), f"File should exist at {file_path}"
 
     with open(file_path, "rb") as f:
