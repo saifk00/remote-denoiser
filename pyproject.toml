@@ -1,14 +1,19 @@
 [project]
 name = "remote-denoiser"
 version = "0.1.0"
-description = "Add your description here"
+description = "Remote RAW image denoising service with benchmarking support"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "fastapi>=0.128.0",
+    "matplotlib>=3.8.0",
     "pytest>=9.0.2",
     "python-multipart>=0.0.21",
     "rawforge>=0.0.1",
     "rawrefinery>=1.3.4",
+    "rich>=13.0.0",
     "uvicorn>=0.40.0",
 ]
+
+[project.scripts]
+benchmark = "benchmark.__main__:main"
