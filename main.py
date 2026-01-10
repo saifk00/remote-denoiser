@@ -1,14 +1,16 @@
 from uuid import uuid4
 import fastapi
-from fastapi import Request, UploadFile, File
+from fastapi import Request, UploadFile, File, FastAPI
 from dataclasses import dataclass
+from fastapi.concurrency import asynccontextmanager
 from pydantic import BaseModel
 import os
 import uvicorn
 import threading
+import hashlib
 
 from worker import ProcessConfig, Worker
-app = fastapi.FastAPI()
+from database import init_database, find_by_hash, db_transaction, insert_hash_record
 
 class WorkerRegistry:
     def __init__(self, models: list[str]) -> None:
@@ -19,7 +21,16 @@ class WorkerRegistry:
         return self._workers[model]
 
 AVAILABLE_MODELS = ["TreeNetDenoise", "DeepSharpen", "TreeNetDenoiseSuperLight"]
-worker_registry = WorkerRegistry(AVAILABLE_MODELS)
+worker_registry = None
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global worker_registry
+    init_database()
+    worker_registry = WorkerRegistry(AVAILABLE_MODELS)
+    yield
+
+app = fastapi.FastAPI(lifespan=lifespan)
 
 @dataclass
 class RawForgeArgs:
@@ -50,11 +61,26 @@ async def create_job(job: JobConfig):
 
 @app.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
+    file_bytes = await file.read()
+    file_size = len(file_bytes)
+    filename = file.filename or "unknown"
+
+    file_hash = hashlib.blake2b(file_bytes, digest_size=32).hexdigest()
+
+    existing = find_by_hash(file_hash)
+    if existing:
+        return {"file_id": existing["file_id"]}
+
     file_id = uuid4().hex
-    os.makedirs(f"data/{file_id}", exist_ok=True)
-    file_path = f"data/{file_id}/image.dng"
-    with open(file_path, "wb") as f:
-        f.write(await file.read())
+
+    with db_transaction() as conn:
+        os.makedirs(f"data/{file_id}", exist_ok=True)
+        file_path = f"data/{file_id}/image.dng"
+        with open(file_path, "wb") as f:
+            f.write(file_bytes)
+
+        insert_hash_record(conn, file_hash, file_id, file_size, filename)
+
     return {"file_id": file_id}
 
 @app.get("/job/{file_id}/download")
