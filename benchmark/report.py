@@ -37,7 +37,6 @@ class ReportGenerator:
         self.generate_timing_chart()
         self.generate_latency_histogram()
         self.generate_html_report()
-        self.generate_flamegraph_instructions()
 
         logger.info("Report generation complete")
 
@@ -65,10 +64,9 @@ class ReportGenerator:
 
         # Prepare data
         labels = [Path(m.file_path).stem[:20] for m in image_metrics]
-        load_raw = [m.load_raw_ms for m in image_metrics]
-        preprocessing = [m.preprocessing_ms for m in image_metrics]
-        inference = [m.inference_ms for m in image_metrics]
-        postprocessing = [m.postprocessing_ms for m in image_metrics]
+        upload = [m.upload_ms for m in image_metrics]
+        job_processing = [m.job_processing_ms for m in image_metrics]
+        download = [m.download_ms for m in image_metrics]
 
         # Create stacked bar chart
         fig, ax = plt.subplots(figsize=(12, 6))
@@ -76,17 +74,13 @@ class ReportGenerator:
         x = range(len(labels))
         width = 0.8
 
-        ax.bar(x, load_raw, width, label='Load RAW', color='#3498db')
-        ax.bar(x, preprocessing, width, bottom=load_raw, label='Preprocessing', color='#2ecc71')
+        ax.bar(x, upload, width, label='Upload (Network)', color='#3498db')
+        ax.bar(x, job_processing, width, bottom=upload,
+               label='Job Processing (Server)', color='#e74c3c')
         ax.bar(
-            x, inference, width,
-            bottom=[a + b for a, b in zip(load_raw, preprocessing)],
-            label='Inference', color='#e74c3c'
-        )
-        ax.bar(
-            x, postprocessing, width,
-            bottom=[a + b + c for a, b, c in zip(load_raw, preprocessing, inference)],
-            label='Postprocessing', color='#9b59b6'
+            x, download, width,
+            bottom=[a + b for a, b in zip(upload, job_processing)],
+            label='Download (Network)', color='#2ecc71'
         )
 
         ax.set_xlabel('Image')
@@ -103,7 +97,7 @@ class ReportGenerator:
         logger.info(f"Saved timing chart to {chart_path}")
 
     def generate_latency_histogram(self) -> None:
-        """Create histogram of inference latencies."""
+        """Create histogram of job processing latencies."""
         try:
             import matplotlib.pyplot as plt
             import matplotlib
@@ -116,25 +110,25 @@ class ReportGenerator:
         if not image_metrics:
             return
 
-        inference_times = [m.inference_ms for m in image_metrics]
+        job_times = [m.job_processing_ms for m in image_metrics]
 
         fig, ax = plt.subplots(figsize=(10, 6))
 
-        ax.hist(inference_times, bins=20, color='#3498db', edgecolor='white', alpha=0.7)
+        ax.hist(job_times, bins=20, color='#e74c3c', edgecolor='white', alpha=0.7)
         ax.axvline(
-            self.metrics.inference_stats.mean_ms,
-            color='#e74c3c', linestyle='--', linewidth=2,
-            label=f'Mean: {self.metrics.inference_stats.mean_ms:.1f}ms'
+            self.metrics.job_processing_stats.mean_ms,
+            color='#3498db', linestyle='--', linewidth=2,
+            label=f'Mean: {self.metrics.job_processing_stats.mean_ms:.1f}ms'
         )
         ax.axvline(
-            self.metrics.inference_stats.p95_ms,
+            self.metrics.job_processing_stats.p95_ms,
             color='#f39c12', linestyle='--', linewidth=2,
-            label=f'P95: {self.metrics.inference_stats.p95_ms:.1f}ms'
+            label=f'P95: {self.metrics.job_processing_stats.p95_ms:.1f}ms'
         )
 
-        ax.set_xlabel('Inference Time (ms)')
+        ax.set_xlabel('Job Processing Time (ms)')
         ax.set_ylabel('Count')
-        ax.set_title('Inference Latency Distribution')
+        ax.set_title('Server-Side Processing Latency Distribution')
         ax.legend()
 
         plt.tight_layout()
@@ -142,60 +136,6 @@ class ReportGenerator:
         plt.savefig(chart_path, dpi=150)
         plt.close()
         logger.info(f"Saved latency histogram to {chart_path}")
-
-    def generate_phase_pie_chart(self) -> None:
-        """Create pie chart showing time spent in each phase."""
-        try:
-            import matplotlib.pyplot as plt
-            import matplotlib
-            matplotlib.use('Agg')
-        except ImportError:
-            return
-
-        phases = [
-            ('Load RAW', self.metrics.load_raw_stats.total_ms, '#3498db'),
-            ('Preprocessing', self.metrics.preprocessing_stats.total_ms, '#2ecc71'),
-            ('Inference', self.metrics.inference_stats.total_ms, '#e74c3c'),
-            ('Postprocessing', self.metrics.postprocessing_stats.total_ms, '#9b59b6'),
-        ]
-
-        labels = [p[0] for p in phases]
-        sizes = [p[1] for p in phases]
-        colors = [p[2] for p in phases]
-
-        # Filter out zero values
-        non_zero = [(l, s, c) for l, s, c in zip(labels, sizes, colors) if s > 0]
-        if not non_zero:
-            return
-
-        labels, sizes, colors = zip(*non_zero)
-
-        fig, ax = plt.subplots(figsize=(8, 8))
-        ax.pie(
-            sizes, labels=labels, colors=colors, autopct='%1.1f%%',
-            startangle=90, explode=[0.02] * len(sizes)
-        )
-        ax.set_title('Time Distribution by Phase')
-
-        chart_path = self.output_dir / "charts" / "phase_distribution.png"
-        plt.savefig(chart_path, dpi=150)
-        plt.close()
-
-    def generate_flamegraph_instructions(self) -> None:
-        """Generate HTML with instructions for viewing flamegraphs."""
-        from benchmark.profiler import generate_flamegraph_html
-
-        traces_dir = self.output_dir / "traces"
-        flamegraph_dir = self.output_dir / "flamegraphs"
-
-        # Check for CPU stacks
-        cpu_stacks = traces_dir / "cpu_stacks.txt"
-        if cpu_stacks.exists():
-            generate_flamegraph_html(
-                cpu_stacks,
-                flamegraph_dir / "view_flamegraph.html",
-                "CPU Flamegraph"
-            )
 
     def generate_html_report(self) -> None:
         """Generate comprehensive HTML report."""
@@ -208,10 +148,10 @@ class ReportGenerator:
             <tr>
                 <td>{Path(m.file_path).name}</td>
                 <td>{m.file_size_bytes / 1024 / 1024:.1f}</td>
-                <td>{m.load_raw_ms:.1f}</td>
-                <td>{m.preprocessing_ms:.1f}</td>
-                <td>{m.inference_ms:.1f}</td>
-                <td>{m.postprocessing_ms:.1f}</td>
+                <td>{m.upload_ms:.1f}</td>
+                <td>{m.job_processing_ms:.1f}</td>
+                <td>{m.download_ms:.1f}</td>
+                <td>{m.network_ms:.1f}</td>
                 <td><strong>{m.total_ms:.1f}</strong></td>
             </tr>
             """
@@ -234,6 +174,8 @@ class ReportGenerator:
             --text-primary: #eee;
             --text-secondary: #aaa;
             --accent: #e94560;
+            --accent-blue: #3498db;
+            --accent-green: #2ecc71;
             --success: #2ecc71;
             --border: #333;
         }}
@@ -389,7 +331,7 @@ class ReportGenerator:
 
         .phase-stats {{
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
             gap: 20px;
         }}
 
@@ -402,6 +344,14 @@ class ReportGenerator:
         .phase-card h4 {{
             color: var(--accent);
             margin-bottom: 15px;
+        }}
+
+        .phase-card.network h4 {{
+            color: var(--accent-blue);
+        }}
+
+        .phase-card.server h4 {{
+            color: var(--accent);
         }}
 
         .stat-row {{
@@ -422,12 +372,25 @@ class ReportGenerator:
         .stat-value {{
             font-family: 'SF Mono', Monaco, monospace;
         }}
+
+        .highlight-box {{
+            background: var(--bg-card);
+            border-radius: 12px;
+            padding: 20px;
+            margin: 20px 0;
+            border-left: 4px solid var(--accent);
+        }}
+
+        .highlight-box h3 {{
+            color: var(--accent);
+            margin-bottom: 10px;
+        }}
     </style>
 </head>
 <body>
     <div class="container">
         <h1>Benchmark Report</h1>
-        <p class="subtitle">Remote Denoiser Performance Analysis</p>
+        <p class="subtitle">Remote Denoiser HTTP API Performance Analysis</p>
 
         <h2>Summary</h2>
         <div class="cards">
@@ -437,29 +400,37 @@ class ReportGenerator:
             </div>
             <div class="card">
                 <div class="card-value">{self.metrics.total_time_s:.2f}s</div>
-                <div class="card-label">Total Processing Time</div>
+                <div class="card-label">Total Time</div>
             </div>
             <div class="card">
                 <div class="card-value">{self.metrics.throughput_images_per_sec:.2f}</div>
                 <div class="card-label">Images/Second</div>
             </div>
             <div class="card">
-                <div class="card-value">{self.metrics.model_load_ms:.0f}ms</div>
-                <div class="card-label">Model Load Time</div>
+                <div class="card-value">{self.metrics.network_stats.percentage_of_total:.1f}%</div>
+                <div class="card-label">Network Overhead</div>
             </div>
+        </div>
+
+        <div class="highlight-box">
+            <h3>Time Breakdown</h3>
+            <p>
+                <strong>Network (Upload + Download):</strong> {self.metrics.network_stats.mean_ms:.1f}ms avg ({self.metrics.network_stats.percentage_of_total:.1f}% of total)<br>
+                <strong>Server Processing:</strong> {self.metrics.job_processing_stats.mean_ms:.1f}ms avg ({self.metrics.job_processing_stats.percentage_of_total:.1f}% of total)
+            </p>
         </div>
 
         <h2>Phase Statistics</h2>
         <div class="phase-stats">
-            {self._render_phase_card("Load RAW", self.metrics.load_raw_stats)}
-            {self._render_phase_card("Preprocessing", self.metrics.preprocessing_stats)}
-            {self._render_phase_card("Inference", self.metrics.inference_stats)}
-            {self._render_phase_card("Postprocessing", self.metrics.postprocessing_stats)}
+            {self._render_phase_card("Upload (Network)", self.metrics.upload_stats, "network")}
+            {self._render_phase_card("Job Processing (Server)", self.metrics.job_processing_stats, "server")}
+            {self._render_phase_card("Download (Network)", self.metrics.download_stats, "network")}
+            {self._render_phase_card("Total Network", self.metrics.network_stats, "network")}
         </div>
 
         {"<h2>Timing Breakdown</h2><div class='chart-container'><img src='charts/timing_breakdown.png' alt='Timing breakdown chart'></div>" if timing_chart_exists else ""}
 
-        {"<h2>Latency Distribution</h2><div class='chart-container'><img src='charts/latency_distribution.png' alt='Latency distribution'></div>" if latency_chart_exists else ""}
+        {"<h2>Server Latency Distribution</h2><div class='chart-container'><img src='charts/latency_distribution.png' alt='Latency distribution'></div>" if latency_chart_exists else ""}
 
         <h2>Per-Image Results</h2>
         <table>
@@ -467,10 +438,10 @@ class ReportGenerator:
                 <tr>
                     <th>Image</th>
                     <th>Size (MB)</th>
-                    <th>Load (ms)</th>
-                    <th>Preprocess (ms)</th>
-                    <th>Inference (ms)</th>
-                    <th>Postprocess (ms)</th>
+                    <th>Upload (ms)</th>
+                    <th>Server (ms)</th>
+                    <th>Download (ms)</th>
+                    <th>Network (ms)</th>
                     <th>Total (ms)</th>
                 </tr>
             </thead>
@@ -481,10 +452,9 @@ class ReportGenerator:
 
         <h2>Trace Files</h2>
         <div class="links">
-            <a href="traces/pytorch_trace.json" download>PyTorch Trace (Chrome Format)</a>
-            <a href="traces/benchmark_timeline.json" download>Benchmark Timeline</a>
-            <a href="traces/profiler_summary.txt">Profiler Summary</a>
-            <a href="flamegraphs/view_flamegraph.html">View Flamegraph</a>
+            <a href="traces/benchmark_timeline.json" download>Benchmark Timeline (Chrome Trace)</a>
+            <a href="raw_metrics.json" download>Raw Metrics JSON</a>
+            <a href="summary.json" download>Summary JSON</a>
         </div>
         <p style="color: var(--text-secondary); margin-top: 10px;">
             Open trace files in <a href="https://ui.perfetto.dev/" style="color: var(--accent);">Perfetto UI</a>
@@ -504,17 +474,9 @@ class ReportGenerator:
                 <dd>{self.metrics.system_info.cuda_version or 'N/A'}</dd>
                 <dt>GPU</dt>
                 <dd>{self.metrics.system_info.cuda_device_name or 'N/A'}</dd>
-                <dt>Tile Size</dt>
-                <dd>{self.metrics.system_info.tile_size}px</dd>
                 <dt>Python Version</dt>
                 <dd>{self.metrics.system_info.python_version.split()[0]}</dd>
             </dl>
-        </div>
-
-        <h2>Raw Data</h2>
-        <div class="links">
-            <a href="summary.json" download>Summary JSON</a>
-            <a href="raw_metrics.json" download>Raw Metrics JSON</a>
         </div>
     </div>
 </body>
@@ -526,10 +488,10 @@ class ReportGenerator:
             f.write(html)
         logger.info(f"Generated HTML report at {report_path}")
 
-    def _render_phase_card(self, name: str, stats) -> str:
+    def _render_phase_card(self, name: str, stats, card_type: str = "") -> str:
         """Render a phase statistics card."""
         return f"""
-        <div class="phase-card">
+        <div class="phase-card {card_type}">
             <h4>{name}</h4>
             <div class="stat-row">
                 <span class="stat-label">Mean</span>

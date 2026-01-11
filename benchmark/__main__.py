@@ -75,11 +75,11 @@ def create_progress_callback():
 def main() -> int:
     """Main entry point for the benchmark CLI."""
     parser = argparse.ArgumentParser(
-        description="Benchmark the remote denoiser",
+        description="Benchmark the remote denoiser HTTP API",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-    # Basic usage - process all images in a folder
+    # Basic usage - starts server automatically and processes images
     python -m benchmark ./test_images/
 
     # Specify output directory
@@ -88,14 +88,11 @@ Examples:
     # Use a different model
     python -m benchmark ./test_images/ -m TreeNetDenoiseSuperLight
 
-    # Adjust tile size for memory/speed tradeoff
-    python -m benchmark ./test_images/ --tile-size 512
+    # Connect to an already-running server
+    python -m benchmark ./test_images/ --no-start-server --server http://localhost:8000
 
-    # Skip profiler for faster benchmarks
-    python -m benchmark ./test_images/ --no-profiler
-
-    # Force CPU execution
-    python -m benchmark ./test_images/ --device cpu
+    # Skip warmup for faster benchmarks
+    python -m benchmark ./test_images/ --warmup 0
         """,
     )
 
@@ -120,13 +117,6 @@ Examples:
     )
 
     parser.add_argument(
-        "--tile-size",
-        type=int,
-        default=256,
-        help="Tile size for inference in pixels (default: 256)",
-    )
-
-    parser.add_argument(
         "--warmup",
         type=int,
         default=2,
@@ -134,16 +124,23 @@ Examples:
     )
 
     parser.add_argument(
-        "--no-profiler",
-        action="store_true",
-        help="Disable PyTorch profiler (faster but no flamegraph)",
+        "--server",
+        type=str,
+        default="http://localhost:8000",
+        help="Server URL to connect to (default: http://localhost:8000)",
     )
 
     parser.add_argument(
-        "--device",
-        type=str,
-        default=None,
-        help="Device for inference: cuda, cuda:0, cpu, mps (default: auto-detect)",
+        "--no-start-server",
+        action="store_true",
+        help="Don't start server automatically - connect to existing server",
+    )
+
+    parser.add_argument(
+        "--server-timeout",
+        type=float,
+        default=120.0,
+        help="Timeout in seconds waiting for server to start (default: 120)",
     )
 
     parser.add_argument(
@@ -174,23 +171,22 @@ Examples:
         input_dir=args.input_dir,
         output_dir=output_dir,
         model=args.model,
-        tile_size=args.tile_size,
         warmup_images=args.warmup,
-        enable_torch_profiler=not args.no_profiler,
-        device=args.device,
+        server_url=args.server,
+        start_server=not args.no_start_server,
+        server_startup_timeout=args.server_timeout,
     )
 
     # Print configuration
     print("=" * 60)
-    print("Remote Denoiser Benchmark")
+    print("Remote Denoiser Benchmark (HTTP API)")
     print("=" * 60)
     print(f"  Input directory:  {config.input_dir}")
     print(f"  Output directory: {config.output_dir}")
     print(f"  Model:            {config.model}")
-    print(f"  Tile size:        {config.tile_size}px")
     print(f"  Warmup images:    {config.warmup_images}")
-    print(f"  Profiler enabled: {config.enable_torch_profiler}")
-    print(f"  Device:           {config.device or 'auto'}")
+    print(f"  Server URL:       {config.server_url}")
+    print(f"  Start server:     {config.start_server}")
     print("=" * 60)
     print()
 
@@ -216,16 +212,15 @@ Examples:
         print(f"  Throughput:       {result.metrics.throughput_images_per_sec:.2f} images/sec")
         print()
         print("Phase breakdown (mean per image):")
-        print(f"  Load RAW:      {result.metrics.load_raw_stats.mean_ms:>8.1f}ms ({result.metrics.load_raw_stats.percentage_of_total:>5.1f}%)")
-        print(f"  Preprocessing: {result.metrics.preprocessing_stats.mean_ms:>8.1f}ms ({result.metrics.preprocessing_stats.percentage_of_total:>5.1f}%)")
-        print(f"  Inference:     {result.metrics.inference_stats.mean_ms:>8.1f}ms ({result.metrics.inference_stats.percentage_of_total:>5.1f}%)")
-        print(f"  Postprocessing:{result.metrics.postprocessing_stats.mean_ms:>8.1f}ms ({result.metrics.postprocessing_stats.percentage_of_total:>5.1f}%)")
+        print(f"  Upload:          {result.metrics.upload_stats.mean_ms:>8.1f}ms ({result.metrics.upload_stats.percentage_of_total:>5.1f}%)")
+        print(f"  Server processing:{result.metrics.job_processing_stats.mean_ms:>8.1f}ms ({result.metrics.job_processing_stats.percentage_of_total:>5.1f}%)")
+        print(f"  Download:        {result.metrics.download_stats.mean_ms:>8.1f}ms ({result.metrics.download_stats.percentage_of_total:>5.1f}%)")
+        print(f"  Network total:   {result.metrics.network_stats.mean_ms:>8.1f}ms ({result.metrics.network_stats.percentage_of_total:>5.1f}%)")
         print()
         print(f"Results saved to: {result.output_dir}")
         print(f"  - HTML Report:  {result.output_dir / 'report.html'}")
         print(f"  - Summary JSON: {result.output_dir / 'summary.json'}")
-        if config.enable_torch_profiler:
-            print(f"  - Trace:        {result.output_dir / 'traces' / 'pytorch_trace.json'}")
+        print(f"  - Timeline:     {result.output_dir / 'traces' / 'benchmark_timeline.json'}")
         print("=" * 60)
 
         return 0

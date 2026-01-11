@@ -77,24 +77,26 @@ class PhaseStats:
 
 @dataclass
 class ImageMetrics:
-    """All metrics for a single processed image."""
+    """All metrics for a single processed image via HTTP API."""
 
     file_path: str
     file_size_bytes: int
 
     # Timing breakdown (all in milliseconds)
-    load_raw_ms: float
-    preprocessing_ms: float
-    inference_ms: float
-    postprocessing_ms: float
-    total_ms: float
-
-    # Optional detailed breakdown
-    inference_breakdown: dict[str, float] | None = None
+    # These reflect the HTTP-based flow:
+    upload_ms: float           # POST /upload - send file to server
+    job_processing_ms: float   # POST /job - server-side processing (includes inference!)
+    download_ms: float         # GET /job/{id}/download - retrieve result
+    total_ms: float            # Total end-to-end time
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
         return asdict(self)
+
+    @property
+    def network_ms(self) -> float:
+        """Total network time (upload + download)."""
+        return self.upload_ms + self.download_ms
 
 
 @dataclass
@@ -146,14 +148,13 @@ class AggregateMetrics:
     total_time_s: float
     throughput_images_per_sec: float
 
-    # Per-phase statistics
-    load_raw_stats: PhaseStats
-    preprocessing_stats: PhaseStats
-    inference_stats: PhaseStats
-    postprocessing_stats: PhaseStats
+    # Per-phase statistics (HTTP-based)
+    upload_stats: PhaseStats        # Network: uploading files
+    job_processing_stats: PhaseStats  # Server: inference + file I/O
+    download_stats: PhaseStats      # Network: downloading results
 
-    # Model load time (one-time cost)
-    model_load_ms: float
+    # Derived stats
+    network_stats: PhaseStats       # Combined upload + download
 
     # System info
     system_info: SystemInfo
@@ -164,12 +165,11 @@ class AggregateMetrics:
             "total_images": self.total_images,
             "total_time_s": self.total_time_s,
             "throughput_images_per_sec": self.throughput_images_per_sec,
-            "model_load_ms": self.model_load_ms,
             "phases": {
-                "load_raw": asdict(self.load_raw_stats),
-                "preprocessing": asdict(self.preprocessing_stats),
-                "inference": asdict(self.inference_stats),
-                "postprocessing": asdict(self.postprocessing_stats),
+                "upload": asdict(self.upload_stats),
+                "job_processing": asdict(self.job_processing_stats),
+                "download": asdict(self.download_stats),
+                "network_total": asdict(self.network_stats),
             },
             "system_info": asdict(self.system_info),
         }
@@ -185,7 +185,6 @@ class MetricsCollector:
         self._records: list[TimingRecord] = []
         self._image_metrics: list[ImageMetrics] = []
         self._lock = threading.Lock()
-        self._model_load_ms: float = 0.0
 
     def record(self, record: TimingRecord) -> None:
         """Thread-safe recording of timing data."""
@@ -200,10 +199,6 @@ class MetricsCollector:
         """Add completed image metrics."""
         with self._lock:
             self._image_metrics.append(metrics)
-
-    def set_model_load_time(self, duration_ms: float) -> None:
-        """Set the model load time."""
-        self._model_load_ms = duration_ms
 
     def get_records_for_file(self, file_path: str) -> list[TimingRecord]:
         """Get all timing records for a specific file."""
@@ -228,19 +223,18 @@ class MetricsCollector:
                     total_images=0,
                     total_time_s=0.0,
                     throughput_images_per_sec=0.0,
-                    load_raw_stats=empty_stats,
-                    preprocessing_stats=empty_stats,
-                    inference_stats=empty_stats,
-                    postprocessing_stats=empty_stats,
-                    model_load_ms=self._model_load_ms,
+                    upload_stats=empty_stats,
+                    job_processing_stats=empty_stats,
+                    download_stats=empty_stats,
+                    network_stats=empty_stats,
                     system_info=system_info,
                 )
 
             # Collect durations by phase
-            load_raw_durations = [m.load_raw_ms for m in self._image_metrics]
-            preprocessing_durations = [m.preprocessing_ms for m in self._image_metrics]
-            inference_durations = [m.inference_ms for m in self._image_metrics]
-            postprocessing_durations = [m.postprocessing_ms for m in self._image_metrics]
+            upload_durations = [m.upload_ms for m in self._image_metrics]
+            job_durations = [m.job_processing_ms for m in self._image_metrics]
+            download_durations = [m.download_ms for m in self._image_metrics]
+            network_durations = [m.network_ms for m in self._image_metrics]
 
             total_processing_ms = sum(m.total_ms for m in self._image_metrics)
             total_time_s = total_processing_ms / 1000
@@ -249,11 +243,10 @@ class MetricsCollector:
                 total_images=len(self._image_metrics),
                 total_time_s=total_time_s,
                 throughput_images_per_sec=len(self._image_metrics) / total_time_s if total_time_s > 0 else 0.0,
-                load_raw_stats=PhaseStats.from_durations("load_raw", load_raw_durations, total_processing_ms),
-                preprocessing_stats=PhaseStats.from_durations("preprocessing", preprocessing_durations, total_processing_ms),
-                inference_stats=PhaseStats.from_durations("inference", inference_durations, total_processing_ms),
-                postprocessing_stats=PhaseStats.from_durations("postprocessing", postprocessing_durations, total_processing_ms),
-                model_load_ms=self._model_load_ms,
+                upload_stats=PhaseStats.from_durations("upload", upload_durations, total_processing_ms),
+                job_processing_stats=PhaseStats.from_durations("job_processing", job_durations, total_processing_ms),
+                download_stats=PhaseStats.from_durations("download", download_durations, total_processing_ms),
+                network_stats=PhaseStats.from_durations("network", network_durations, total_processing_ms),
                 system_info=system_info,
             )
 
@@ -284,32 +277,50 @@ class MetricsCollector:
         """
         with self._lock:
             events = []
-            # Find the earliest timestamp to use as reference
-            if not self._records:
-                min_ts = 0
-            else:
-                min_ts = min(r.start_ns for r in self._records)
 
-            for record in self._records:
-                # Chrome trace uses microseconds
-                start_us = (record.start_ns - min_ts) / 1000
-                duration_us = record.duration_ns / 1000
+            # Build events from image metrics for a cleaner timeline
+            current_time_us = 0
+            for m in self._image_metrics:
+                file_name = Path(m.file_path).name
 
-                # Determine process/thread based on file
-                file_path = record.metadata.get("file", "unknown")
-                pid = 1  # Single process
-                tid = hash(file_path) % 1000  # Thread per file
-
+                # Upload event
                 events.append({
-                    "name": record.name,
-                    "cat": "benchmark",
-                    "ph": "X",  # Complete event
-                    "ts": start_us,
-                    "dur": duration_us,
-                    "pid": pid,
-                    "tid": tid,
-                    "args": record.metadata,
+                    "name": "upload",
+                    "cat": "network",
+                    "ph": "X",
+                    "ts": current_time_us,
+                    "dur": m.upload_ms * 1000,
+                    "pid": 1,
+                    "tid": 1,
+                    "args": {"file": file_name, "bytes": m.file_size_bytes},
                 })
+                current_time_us += m.upload_ms * 1000
+
+                # Job processing event
+                events.append({
+                    "name": "job_processing",
+                    "cat": "server",
+                    "ph": "X",
+                    "ts": current_time_us,
+                    "dur": m.job_processing_ms * 1000,
+                    "pid": 1,
+                    "tid": 1,
+                    "args": {"file": file_name},
+                })
+                current_time_us += m.job_processing_ms * 1000
+
+                # Download event
+                events.append({
+                    "name": "download",
+                    "cat": "network",
+                    "ph": "X",
+                    "ts": current_time_us,
+                    "dur": m.download_ms * 1000,
+                    "pid": 1,
+                    "tid": 1,
+                    "args": {"file": file_name},
+                })
+                current_time_us += m.download_ms * 1000
 
             trace_data = {
                 "traceEvents": events,
