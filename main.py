@@ -18,7 +18,7 @@ data_dir = get_data_dir()
 class WorkerRegistry:
     def __init__(self, models: list[str]) -> None:
         self._lock = threading.Lock()
-        self._workers: dict[str, Worker] = [{model: Worker(model)} for model in models]
+        self._workers: dict[str, Worker] = {model: Worker(model) for model in models}
 
     def get(self, model: str) -> Worker:
         return self._workers[model]

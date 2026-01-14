@@ -6,6 +6,7 @@ from RawForge.application.ModelHandler import ModelHandler
 from dataclasses import dataclass
 import logging
 import queue
+import threading
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -43,6 +44,10 @@ class Worker:
         # Set device if specified
         if device:
             self.handler.set_device(device)
+
+        # Start background thread to process queue
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
 
         logger.info(f"Worker initialized with model: {model}")
 
